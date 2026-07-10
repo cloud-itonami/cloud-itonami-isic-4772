@@ -1,0 +1,82 @@
+(ns pharmacy.phase-test
+  "Phase 0→3 staged rollout through the OperationActor. The phase can only
+  make the actor MORE conservative than the governor: hold writes that
+  aren't enabled yet, force human approval before auto-commit is
+  unlocked — and `:rx/dispense`/`:rx/refill`/`:dispute/request` never
+  auto-commit at ANY phase (pharmacist sign-off is structural, not a
+  rollout-maturity gate)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [langgraph.graph :as g]
+            [pharmacy.store :as store]
+            [pharmacy.operation :as op]))
+
+(def clerk      {:actor-id "cl-1" :actor-role :otc-clerk})
+(def pharmacist {:actor-id "ph-1" :actor-role :pharmacist})
+
+(def clean-otc
+  {:op :otc/dispense :subject "pt-100" :item-id "item-otc-100" :quantity-grams 0.4M
+   :source {:class :fda-drug-registry :ref "ndc:demo-otc-100"}})
+
+(def clean-rx
+  {:op :rx/dispense :subject "pt-100" :prescription-id "rx-100" :item-id "item-rx-100"
+   :quantity 20
+   :source {:class :licensed-erx-network :ref "net-demo:rx-100" :network-id "net-demo"}})
+
+(def clean-report
+  {:op :report/query :subject "pt-100"})
+
+(def dispute-req
+  {:op :dispute/request :subject "rx-100" :disputed-field :quantity-dispensed :claim :incorrect})
+
+(defn- run [phase req ctx]
+  (let [s (store/seed-db)
+        actor (op/build s)]
+    [s (g/run* actor {:request req :context (assoc ctx :phase phase)}
+               {:thread-id (str "ph-" phase "-" (:op req))})]))
+
+(deftest phase0-holds-all-writes
+  (let [[s res] (run 0 clean-otc clerk)]
+    (is (= :hold (get-in res [:state :disposition])))
+    (is (= :phase-disabled (-> (store/ledger s) first :phase-reason)))))
+
+(deftest phase0-allows-governed-reads
+  (let [[_ res] (run 0 clean-report (assoc {:actor-id "sub-1" :actor-role :subscriber} :tenant "tenant-basic"))]
+    (is (= :commit (get-in res [:state :disposition])))))
+
+(deftest phase1-forces-approval-on-clean-otc
+  (testing "a clean OTC dispense that auto-commits in phase 3 must go to a human in phase 1"
+    (let [[_ res] (run 1 clean-otc clerk)]
+      (is (= :interrupted (:status res)))
+      (is (= :phase-approval (-> res :state :audit last :reason))))))
+
+(deftest phase1-holds-rx-writes
+  (testing "phase 1 hasn't enabled Rx writes yet"
+    (let [[_ res] (run 1 clean-rx pharmacist)]
+      (is (= :hold (get-in res [:state :disposition]))))))
+
+(deftest phase2-enables-rx-under-approval
+  (let [[_ res] (run 2 clean-rx pharmacist)]
+    (is (= :interrupted (:status res)))
+    (is (= :phase-approval (-> res :state :audit last :reason)))))
+
+(deftest phase3-auto-commits-clean-otc
+  (let [[_s res] (run 3 clean-otc clerk)]
+    (is (= :commit (get-in res [:state :disposition])))))
+
+(deftest phase3-never-auto-commits-clean-rx
+  (testing "a governor-clean Rx dispense STILL requires a pharmacist, even at phase 3"
+    (let [[_ res] (run 3 clean-rx pharmacist)]
+      (is (= :interrupted (:status res)))
+      (is (= :phase-approval (-> res :state :audit last :reason))))))
+
+(deftest governor-hold-beats-phase
+  (testing "a hard governor violation (expired prescription) holds even in the most permissive phase"
+    (let [[_ res] (run 3 (assoc clean-rx :prescription-id "rx-expired") pharmacist)]
+      (is (= :hold (get-in res [:state :disposition]))))))
+
+(deftest dispute-request-never-auto-commits-at-any-phase
+  (testing "a dispensing dispute never reaches :commit without an explicit human :approval"
+    (doseq [ph [0 1 2 3]]
+      (let [[_ res] (run ph dispute-req pharmacist)]
+        (is (not= :commit (get-in res [:state :disposition]))
+            (str "phase " ph " must not auto-commit a dispute"))))))

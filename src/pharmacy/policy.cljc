@@ -1,0 +1,202 @@
+(ns pharmacy.policy
+  "PharmacyGovernor — the independent compliance layer that earns the
+  PharmacyOrder-LLM the right to dispense, refill or resolve a dispute.
+  The LLM has no notion of prescription validity, controlled-substance
+  ceilings, restricted-OTC age/quantity limits, e-prescribing network
+  licensing, or a subscriber's disclosure entitlement, so this MUST be a
+  separate system able to *reject* a proposal and fall back to HOLD
+  (dispense/refill/disclose nothing) — this actor's analog of
+  `cloud-itonami-isic-6311`'s MarketDataGovernor and robotaxi's Minimal
+  Risk Condition.
+
+  Eight checks, in priority order. The first five are HARD violations: a
+  human approver CANNOT override them. The last three are SOFT/always-
+  escalate: they route to a licensed pharmacist, who may approve.
+
+    1. rbac                       — does actor-role have permission for op?
+    2. prescription-verification-gate — does the cited prescription exist,
+                                     verified, unexpired, and (for refills)
+                                     have a refill available?
+    3. restricted-quantity-gate   — does the requested quantity respect
+                                     the item's controlled-substance
+                                     schedule ceiling / Schedule II never-
+                                     refillable rule / restricted-OTC
+                                     age+quantity limit?
+    4. source-provenance-gate     — does the request cite an allowed
+                                     provenance class, and — for
+                                     `:licensed-erx-network` — an ACTIVE
+                                     network?
+    5. licensed-disclosure        — is there an active subscriber
+                                     contract, and does the requested
+                                     column set stay within its tier?
+    6. confidence floor           — LLM confidence below threshold →
+                                     escalate.
+    7. interaction-flag gate      — the patient has a documented allergy/
+                                     interaction flag against this item →
+                                     always escalate to a pharmacist.
+    8. dispute requests           — a dispensing dispute/adverse-event
+                                     report NEVER auto-resolves, at any
+                                     confidence, any phase."
+  (:require [clojure.set :as set]
+            [pharmacy.facts :as facts]
+            [pharmacy.store :as store]))
+
+;; ───────────────────────── policy tables ─────────────────────────
+
+(def confidence-floor 0.6)
+
+(def permissions
+  "actor-role → set of operations it may perform. Only `:pharmacist` may
+  dispense/refill a prescription item; `:otc-clerk` is limited to OTC
+  (still governor-gated for restricted items); `:subscriber` is
+  read-only."
+  {:pharmacist #{:otc/dispense :rx/dispense :rx/refill :dispute/request}
+   :otc-clerk  #{:otc/dispense}
+   :subscriber #{:report/query}})
+
+(def tier-columns
+  "For `:report/query` — the columns each licensed subscriber tier may
+  see, the disclosure-minimization analog of
+  `cloud-itonami-isic-6311`'s `tier-columns`."
+  (let [base #{:patient-id :item-id :status :as-of}
+        network-extra #{:prescriber-npi :refills-remaining}]
+    {:tier/basic   base
+     :tier/network (into base network-extra)}))
+
+;; ───────────────────────── checks ─────────────────────────
+
+(defn- rbac-violations [{:keys [op]} {:keys [actor-role]}]
+  (when-not (contains? (get permissions actor-role #{}) op)
+    [{:rule :rbac :detail (str actor-role " は " op " の権限を持たない")}]))
+
+(defn- prescription-violations
+  "`:rx/dispense`/`:rx/refill` only — does the cited prescription exist,
+  verified, unexpired, and (refills only) have a refill available?"
+  [{:keys [op prescription-id]} st]
+  (when (contains? #{:rx/dispense :rx/refill} op)
+    (let [rx (store/prescription st prescription-id)]
+      (cond
+        (nil? rx)
+        [{:rule :prescription-verification-gate :detail (str "処方箋が存在しない: " prescription-id)}]
+
+        (not (:verified? rx))
+        [{:rule :prescription-verification-gate :detail (str "処方箋が未検証: " prescription-id)}]
+
+        (:expired? rx)
+        [{:rule :prescription-verification-gate :detail (str "処方箋が期限切れ: " prescription-id)}]
+
+        (and (= op :rx/refill) (<= (:refills-remaining rx 0) 0))
+        [{:rule :prescription-verification-gate :detail (str "リフィル残数が無い: " prescription-id)}]))))
+
+(defn- rx-quantity-violations
+  "`:rx/dispense`/`:rx/refill` — the item's per-fill ceiling and the
+  Schedule II never-refillable rule (defense in depth: enforced
+  structurally here regardless of what a prescription record's
+  `:refills-remaining` happens to say)."
+  [{:keys [op item-id quantity]} st]
+  (let [it  (store/item st item-id)
+        cap (:max-quantity-per-fill it)]
+    (into []
+          (concat
+           (when (and cap quantity (> quantity cap))
+             [{:rule :restricted-quantity-gate
+               :detail (str "数量が上限超過: qty=" quantity " > max=" cap " (item=" item-id ")")}])
+           (when (and (= op :rx/refill) (= :ii (:schedule it)))
+             [{:rule :restricted-quantity-gate
+               :detail "Schedule II 品目はリフィル不可(法定、処方箋の残数に関わらず)"}])))))
+
+(defn- restricted-otc-violations
+  "`:otc/dispense` of a `:restricted?` item — age floor and single-
+  transaction quantity ceiling (the pseudoephedrine-purchase-limit
+  shape). R0-honest simplification: a single-transaction ceiling, not the
+  real rolling 30-day window a production deployment would need."
+  [{:keys [op subject item-id quantity-grams]} st]
+  (when (= op :otc/dispense)
+    (let [it (store/item st item-id)
+          pt (store/patient st subject)]
+      (when (:restricted? it)
+        (into []
+              (concat
+               (when (and (:min-age it) pt (< (:age pt) (:min-age it)))
+                 [{:rule :restricted-quantity-gate
+                   :detail (str "年齢制限未達: age=" (:age pt) " < min=" (:min-age it))}])
+               (when (and (:max-quantity-grams it) quantity-grams
+                          (> quantity-grams (:max-quantity-grams it)))
+                 [{:rule :restricted-quantity-gate
+                   :detail (str "数量が規制上限超過: qty=" quantity-grams "g > max="
+                                (:max-quantity-grams it) "g")}])))))))
+
+(defn- source-provenance-violations
+  [{:keys [op]} proposal st]
+  (when (contains? #{:otc/dispense :rx/dispense :rx/refill} op)
+    (let [src (:source proposal)]
+      (cond
+        (or (nil? src) (not (facts/class-allowed? (:class src))))
+        [{:rule :source-provenance-gate
+          :detail (str "出典が無いか許可された出典クラスでない: " (pr-str src))}]
+
+        (facts/licensed-network-class? (:class src))
+        (let [net (store/erx-network st (:network-id src))]
+          (when (or (nil? net) (not (:active? net)))
+            [{:rule :source-provenance-gate
+              :detail (str "有効な erx-network が無い: network-id=" (:network-id src))}]))
+
+        :else nil))))
+
+(defn- licensed-disclosure-violations
+  [{:keys [op]} {:keys [tenant]} proposal st]
+  (when (= op :report/query)
+    (let [c (when tenant (store/contract st tenant))]
+      (if (or (nil? c) (not (:active? c)))
+        [{:rule :licensed-disclosure :detail (str "有効な契約が無い: tenant=" tenant)}]
+        (let [allowed (get tier-columns (:tier c) #{})
+              cols    (set (:columns proposal))
+              extra   (set/difference cols allowed)]
+          (when (seq extra)
+            [{:rule :licensed-disclosure
+              :detail (str "契約 tier " (:tier c) " に対し過剰な列: " (vec extra))}]))))))
+
+(defn- interaction-flag?
+  [{:keys [op subject item-id]} st]
+  (when (contains? #{:otc/dispense :rx/dispense :rx/refill} op)
+    (let [pt (store/patient st subject)
+          it (store/item st item-id)]
+      (boolean (and pt it (seq (set/intersection (:allergies pt #{}) (:interacts-with it #{}))))))))
+
+(defn check
+  "Censors a PharmacyOrder-LLM proposal against the policy tables. Returns
+   {:ok? bool :violations [..] :confidence c :escalate? bool
+    :interaction-flag? bool :hard? bool :dispute? bool}."
+  [request context proposal st]
+  (let [op      (:op request)
+        hard    (into []
+                      (concat (rbac-violations request context)
+                              (prescription-violations request st)
+                              (restricted-otc-violations request st)
+                              (when (contains? #{:rx/dispense :rx/refill} op)
+                                (rx-quantity-violations request st))
+                              (source-provenance-violations request proposal st)
+                              (licensed-disclosure-violations request context proposal st)))
+        conf         (:confidence proposal 0.0)
+        low?         (< conf confidence-floor)
+        interaction? (interaction-flag? request st)
+        dispute?     (= :dispute/request op)
+        hard?        (boolean (seq hard))]
+    {:ok?               (and (not hard?) (not low?) (not interaction?) (not dispute?))
+     :violations        hard
+     :confidence        conf
+     :hard?             hard?
+     :escalate?         (and (not hard?) (or low? interaction? dispute?))
+     :interaction-flag? interaction?
+     :dispute?          dispute?}))
+
+(defn hold-fact
+  [request context verdict]
+  {:t          :policy-hold
+   :op         (:op request)
+   :actor      (:actor-id context)
+   :subject    (:subject request)
+   :disposition :hold
+   :basis      (mapv :rule (:violations verdict))
+   :violations (:violations verdict)
+   :confidence (:confidence verdict)})

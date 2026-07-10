@@ -1,0 +1,60 @@
+(ns pharmacy.store-contract-test
+  "The Store contract, run against BOTH backends. Proving MemStore and the
+  Datomic-backed (langchain.db) store satisfy the same contract is what
+  makes 'swap the SSoT for Datomic' a configuration change, not a
+  rewrite."
+  (:require [clojure.test :refer [deftest is testing]]
+            [pharmacy.store :as store]))
+
+(defn- backends []
+  [["MemStore" (store/seed-db)] ["DatomicStore" (store/datomic-seed-db)]])
+
+(deftest read-parity
+  (doseq [[label s] (backends)]
+    (testing label
+      (is (= "山田 花子(デモ)" (:name (store/patient s "pt-100"))))
+      (is (= 34 (:age (store/patient s "pt-100"))))
+      (is (= #{:penicillin} (:allergies (store/patient s "pt-300"))))
+      (is (false? (:restricted? (store/item s "item-otc-100"))))
+      (is (true? (:restricted? (store/item s "item-otc-200"))))
+      (is (= 18 (:min-age (store/item s "item-otc-200"))))
+      (is (= :ii (:schedule (store/item s "item-rx-200"))))
+      (is (= #{:penicillin} (:interacts-with (store/item s "item-rx-300"))))
+      (is (= "item-rx-100" (:item-id (store/prescription s "rx-100"))))
+      (is (true? (:verified? (store/prescription s "rx-100"))))
+      (is (true? (:expired? (store/prescription s "rx-expired"))))
+      (is (true? (:active? (store/erx-network s "net-demo"))))
+      (is (false? (:active? (store/erx-network s "net-expired"))))
+      (is (= :tier/network (:tier (store/contract s "tenant-chain")))))))
+
+(deftest write-and-ledger-parity
+  (doseq [[label s] (backends)]
+    (testing label
+      (testing "refill decrements the prescription's refills-remaining"
+        (store/commit-record! s {:effect :prescription-refill-apply
+                                 :value {:prescription-id "rx-100" :quantity 10}
+                                 :path ["rx-100"]})
+        (is (= 1 (:refills-remaining (store/prescription s "rx-100")))))
+      (testing "dispute-apply patches the target prescription (revokes verification pending re-review)"
+        (store/commit-record! s {:effect :dispute-apply
+                                 :value {:patch {:verified? false}}
+                                 :path ["rx-100"]})
+        (is (false? (:verified? (store/prescription s "rx-100")))))
+      (testing "ledger is append-only and order-preserving"
+        (store/append-ledger! s {:op :a :disposition :commit})
+        (store/append-ledger! s {:op :b :disposition :hold})
+        (is (= [:commit :hold] (mapv :disposition (take-last 2 (store/ledger s)))))))))
+
+(deftest contract-lookup
+  (doseq [[label s] (backends)]
+    (testing label
+      (is (= :tier/network (:tier (store/contract s "tenant-chain"))))
+      (is (true? (:active? (store/contract s "tenant-chain"))))
+      (is (nil? (store/contract s "tenant-ghost"))))))
+
+(deftest datomic-empty-store-is-usable
+  (let [s (store/datomic-store)]
+    (is (nil? (store/patient s "nope")))
+    (is (= [] (store/ledger s)))
+    (store/with-patients s {"x" {:id "x" :name "X" :age 40 :allergies #{}}})
+    (is (= "X" (:name (store/patient s "x"))))))
