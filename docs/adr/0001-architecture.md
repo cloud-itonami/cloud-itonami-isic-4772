@@ -4,7 +4,7 @@
 - 関連: `cloud-itonami-isic-6311`(MarketData-LLM を MarketDataGovernor で
   封じ込める構図の直接の手本)、`cloud-itonami-isic-7820`(default-phase=1
   を初期実装時点から採用する fail-open 対策の手本)
-- 文脈: com-junkawasaki/root superproject ADR-2607113000(本 ADR の対)
+- 文脈: com-junkawasaki/root superproject ADR-2607114772(本 ADR の対)
 
 ## 課題
 
@@ -81,7 +81,7 @@ e-prescribing/PDMP ネットワークを登録して初めて取込可能)。
 ## References
 
 - `README.md` / `docs/business-model.md` / `docs/DESIGN.md`
-- `90-docs/adr/2607113000-cloud-itonami-isic-4772-pharmacy-retail-actor.md`
+- `90-docs/adr/2607114772-cloud-itonami-isic-4772-pharmacy-retail-actor.md`
   (superproject 側 ADR、本 ADR と対)
 - `orgs/kotoba-lang/industry/resources/kotoba/industry/registry.edn`
   (id "4772" エントリ)

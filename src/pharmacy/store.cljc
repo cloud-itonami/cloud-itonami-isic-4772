@@ -13,7 +13,7 @@
   (test/pharmacy/store_contract_test.clj) — the actor, the
   PharmacyGovernor and the audit ledger never know which SSoT they run on.
 
-  Entity shapes (ADR-2607113000): a patient (age + allergy flags only — no
+  Entity shapes (ADR-2607114772): a patient (age + allergy flags only — no
   broader medical record), an item (drug-catalog entry: OTC/Rx, DEA
   schedule, restricted-OTC limits), a prescription (patient × item ×
   prescriber × refill state), an erx-network (provenance for
