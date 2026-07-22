@@ -4,7 +4,12 @@
  ;; the kotoba-lang org of this workspace (kotoba wasm → clojurewasm →
  ;; ClojureScript → nbb runtime priority, CLAUDE.md).
  :deps {io.github.kotoba-lang/langgraph
-        {:local/root "../../kotoba-lang/langgraph"}}
+        {:local/root "../../kotoba-lang/langgraph"}
+        ;; shared enc/dec* codec + identity-schema + event-log/entity
+        ;; field-spec store machinery (ADR-2607141600) -- store.cljc
+        ;; requires this instead of hand-rolling the codec.
+        io.github.kotoba-lang/langchain-store
+        {:local/root "../../kotoba-lang/langchain-store"}}
  :aliases
  {;; offline workspace dev — pin transitive langchain to local checkout
   :dev {:override-deps

@@ -25,10 +25,9 @@
   The ledger stays append-only on every backend — 'who dispensed/refilled
   what, on what prescription/network, on what source basis' is always a
   query over an immutable log."
-  (:require #?(:clj  [clojure.edn :as edn]
-               :cljs [cljs.reader :as edn])
-            [clojure.string :as str]
-            [langchain.db :as d]))
+  (:require [clojure.string :as str]
+            [langchain.db :as d]
+            [langchain-store.core :as ls]))
 
 (defprotocol Store
   (patient [s id])
@@ -48,12 +47,11 @@
 ;; ───────────────────────── demo data (fictitious, non-real patients) ─────
 
 (defn demo-data
-  "A small, entirely fictitious dataset so the actor + tests run offline
-  and no real patient, prescriber or drug transaction is ever asserted by
-  this repository. `pt-200` (age 16) and `pt-300` (penicillin allergy)
-  carry demo flags purely to exercise the age-restriction and
-  interaction-flag governor gates — they are not claims about any real
-  person."
+  "A small, entirely fictitious dataset so the actor + tests run offline and
+  no real patient, prescriber or drug transaction is ever asserted by this
+  repository. `pt-200` (age 16) and `pt-300` (penicillin allergy) carry demo
+  flags purely to exercise the age-restriction and interaction-flag
+  governor gates — they are not claims about any real person."
   []
   {:patients
    {"pt-100" {:id "pt-100" :name "山田 花子(デモ)" :age 34 :allergies #{}}
@@ -137,80 +135,72 @@
 
 ;; ───────────────────────── DatomicStore (langchain.db) ─────────────────
 
+;; Schema, the EDN-blob codec (enc/dec*), and the per-entity field-spec
+;; map<->tx<->pull machinery are the shared kotoba-lang/langchain-store
+;; substrate (ADR-2607141600) — the seam ~190 actors hand-roll. This store
+;; keeps only the domain-specific field specs (patient/item/prescription/
+;; erx-network/contract) and the ledger's seq-keyed event-log wiring.
 (def ^:private schema
-  {:patient/id      {:db/unique :db.unique/identity}
-   :item/id         {:db/unique :db.unique/identity}
-   :prescription/id {:db/unique :db.unique/identity}
-   :erx-network/id  {:db/unique :db.unique/identity}
-   :contract/tenant {:db/unique :db.unique/identity}
-   :ledger/seq      {:db/unique :db.unique/identity}})
+  (ls/identity-schema [:patient/id :item/id :prescription/id :erx-network/id
+                       :contract/tenant :ledger/seq]))
 
-(defn- enc [v] (pr-str v))
-(defn- dec* [s] (when s (edn/read-string s)))
+(def ^:private patient-spec
+  {:id {:attr :patient/id}
+   :name {:attr :patient/name}
+   :age {:attr :patient/age}
+   :allergies {:attr :patient/allergies :blob? true :default #{}}})
 
-(defn- patient->tx [{:keys [id name age allergies]}]
-  {:patient/id id :patient/name name :patient/age age :patient/allergies (enc (or allergies #{}))})
+(defn- patient->tx [m] (ls/map->tx patient-spec m))
+(def ^:private patient-pull (ls/pull-pattern patient-spec))
+(defn- pull->patient [m] (ls/pull->map patient-spec :id m))
 
-(defn- pull->patient [m]
-  (when (:patient/id m)
-    {:id (:patient/id m) :name (:patient/name m) :age (:patient/age m)
-     :allergies (or (dec* (:patient/allergies m)) #{})}))
+(def ^:private item-spec
+  {:id {:attr :item/id}
+   :name {:attr :item/name}
+   :rx? {:attr :item/rx :coerce boolean}
+   :restricted? {:attr :item/restricted :coerce boolean}
+   :min-age {:attr :item/min-age}
+   :max-quantity-grams {:attr :item/max-quantity-grams :blob? true}
+   :schedule {:attr :item/schedule}
+   :max-quantity-per-fill {:attr :item/max-quantity-per-fill}
+   :interacts-with {:attr :item/interacts-with :blob? true :default #{}}
+   :source {:attr :item/source :blob? true}})
 
-(def ^:private patient-pull [:patient/id :patient/name :patient/age :patient/allergies])
+(defn- item->tx [m] (ls/map->tx item-spec m))
+(def ^:private item-pull (ls/pull-pattern item-spec))
+(defn- pull->item [m] (ls/pull->map item-spec :id m))
 
-(defn- item->tx [{:keys [id name rx? restricted? min-age max-quantity-grams
-                          schedule max-quantity-per-fill interacts-with source]}]
-  (cond-> {:item/id id :item/name name :item/rx (boolean rx?) :item/restricted (boolean restricted?)
-           :item/interacts-with (enc (or interacts-with #{})) :item/source (enc source)}
-    min-age               (assoc :item/min-age min-age)
-    max-quantity-grams    (assoc :item/max-quantity-grams (enc max-quantity-grams))
-    schedule              (assoc :item/schedule schedule)
-    max-quantity-per-fill (assoc :item/max-quantity-per-fill max-quantity-per-fill)))
+(def ^:private prescription-spec
+  {:id {:attr :prescription/id}
+   :patient-id {:attr :prescription/patient-id}
+   :item-id {:attr :prescription/item-id}
+   :prescriber-npi {:attr :prescription/prescriber-npi}
+   :verified? {:attr :prescription/verified :coerce boolean}
+   :expired? {:attr :prescription/expired :coerce boolean}
+   :refills-remaining {:attr :prescription/refills-remaining}})
 
-(defn- pull->item [m]
-  (when (:item/id m)
-    {:id (:item/id m) :name (:item/name m) :rx? (:item/rx m) :restricted? (:item/restricted m)
-     :min-age (:item/min-age m) :max-quantity-grams (dec* (:item/max-quantity-grams m))
-     :schedule (:item/schedule m) :max-quantity-per-fill (:item/max-quantity-per-fill m)
-     :interacts-with (or (dec* (:item/interacts-with m)) #{}) :source (dec* (:item/source m))}))
+(defn- prescription->tx [m] (ls/map->tx prescription-spec m))
+(def ^:private prescription-pull (ls/pull-pattern prescription-spec))
+(defn- pull->prescription [m] (ls/pull->map prescription-spec :id m))
 
-(def ^:private item-pull
-  [:item/id :item/name :item/rx :item/restricted :item/min-age :item/max-quantity-grams
-   :item/schedule :item/max-quantity-per-fill :item/interacts-with :item/source])
+(def ^:private erx-network-spec
+  {:network-id {:attr :erx-network/id}
+   :provider {:attr :erx-network/provider}
+   :active? {:attr :erx-network/active :coerce boolean}})
 
-(defn- prescription->tx [{:keys [id patient-id item-id prescriber-npi verified? expired? refills-remaining]}]
-  {:prescription/id id :prescription/patient-id patient-id :prescription/item-id item-id
-   :prescription/prescriber-npi prescriber-npi :prescription/verified (boolean verified?)
-   :prescription/expired (boolean expired?) :prescription/refills-remaining refills-remaining})
+(defn- erx-network->tx [m] (ls/map->tx erx-network-spec m))
+(def ^:private erx-network-pull (ls/pull-pattern erx-network-spec))
+(defn- pull->erx-network [m] (ls/pull->map erx-network-spec :network-id m))
 
-(defn- pull->prescription [m]
-  (when (:prescription/id m)
-    {:id (:prescription/id m) :patient-id (:prescription/patient-id m) :item-id (:prescription/item-id m)
-     :prescriber-npi (:prescription/prescriber-npi m) :verified? (:prescription/verified m)
-     :expired? (:prescription/expired m) :refills-remaining (:prescription/refills-remaining m)}))
+(def ^:private contract-spec
+  {:tenant {:attr :contract/tenant}
+   :tier {:attr :contract/tier}
+   :active? {:attr :contract/active :coerce boolean}
+   :purpose {:attr :contract/purpose}})
 
-(def ^:private prescription-pull
-  [:prescription/id :prescription/patient-id :prescription/item-id :prescription/prescriber-npi
-   :prescription/verified :prescription/expired :prescription/refills-remaining])
-
-(defn- erx-network->tx [{:keys [network-id provider active?]}]
-  {:erx-network/id network-id :erx-network/provider provider :erx-network/active (boolean active?)})
-
-(defn- pull->erx-network [m]
-  (when (:erx-network/id m)
-    {:network-id (:erx-network/id m) :provider (:erx-network/provider m) :active? (:erx-network/active m)}))
-
-(def ^:private erx-network-pull [:erx-network/id :erx-network/provider :erx-network/active])
-
-(defn- contract->tx [{:keys [tenant tier active? purpose]}]
-  {:contract/tenant tenant :contract/tier tier :contract/active active? :contract/purpose purpose})
-
-(defn- pull->contract [m]
-  (when (:contract/tenant m)
-    {:tenant (:contract/tenant m) :tier (:contract/tier m)
-     :active? (:contract/active m) :purpose (:contract/purpose m)}))
-
-(def ^:private contract-pull [:contract/tenant :contract/tier :contract/active :contract/purpose])
+(defn- contract->tx [m] (ls/map->tx contract-spec m))
+(def ^:private contract-pull (ls/pull-pattern contract-spec))
+(defn- pull->contract [m] (ls/pull->map contract-spec :tenant m))
 
 (defrecord DatomicStore [conn]
   Store
@@ -219,10 +209,7 @@
   (prescription [_ id] (pull->prescription (d/pull (d/db conn) prescription-pull [:prescription/id id])))
   (erx-network [_ network-id] (pull->erx-network (d/pull (d/db conn) erx-network-pull [:erx-network/id network-id])))
   (contract [_ tenant] (pull->contract (d/pull (d/db conn) contract-pull [:contract/tenant tenant])))
-  (ledger [_]
-    (->> (d/q '[:find ?s ?f :where [?e :ledger/seq ?s] [?e :ledger/fact ?f]] (d/db conn))
-         (sort-by first)
-         (mapv (comp dec* second))))
+  (ledger [_] (ls/read-stream conn :ledger/seq :ledger/fact))
   (commit-record! [s {:keys [effect path value]}]
     (case effect
       :prescription-refill-apply
@@ -233,7 +220,7 @@
       nil)
     s)
   (append-ledger! [s fact]
-    (d/transact! conn [{:ledger/seq (count (ledger s)) :ledger/fact (enc fact)}])
+    (ls/append-blob! conn :ledger/seq :ledger/fact (count (ledger s)) fact)
     fact)
   (with-patients [s ps]      (when (seq ps) (d/transact! conn (mapv patient->tx (vals ps)))) s)
   (with-items [s is]         (when (seq is) (d/transact! conn (mapv item->tx (vals is)))) s)

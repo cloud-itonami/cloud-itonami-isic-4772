@@ -1,0 +1,40 @@
+{:itonami.blueprint/id "cloud-itonami-isic-4772"
+ :itonami.blueprint/name "Governed Pharmacy Dispensing Actor"
+ :itonami.blueprint/isic-rev5 "4772"
+ :itonami.blueprint/domain :health/pharmacy-retail
+ :itonami.blueprint/license "AGPL-3.0-or-later"
+ :itonami.blueprint/social-impact [:patient-safety :controlled-substance-compliance]
+ :itonami.blueprint/governor :pharmacy-governor
+ :itonami.blueprint/robotics false
+ :itonami.blueprint/required-technologies [:identity :forms :audit-ledger]
+ :itonami.blueprint/optional-technologies [:dmn :bpmn]
+ :itonami.blueprint/status :public-oss
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "PharmacyOrder-LLM sealed into a single :advise node, always routed through
+ an independent PharmacyGovernor (src/pharmacy/policy.cljc) and a 0->3
+ rollout-phase gate, via a langgraph-clj StateGraph (src/pharmacy/
+ operation.cljc) with an append-only audit ledger and a MemStore +
+ DatomicStore (langchain.db) SSoT proven to satisfy the same store
+ contract test. Governed operations: :otc/dispense, :rx/dispense,
+ :rx/refill, :dispute/request, :report/query. Eight governor checks --
+ five HARD (rbac, prescription-verification-gate, restricted-quantity-gate,
+ source-provenance-gate, licensed-disclosure) and three SOFT/
+ always-escalate (confidence floor, interaction-flag gate, dispute
+ requests). restricted-quantity-gate and interaction-flag gate are
+ pharmacy-specific: the former enforces an item's per-fill quantity
+ ceiling and a structural Schedule-II never-refillable rule regardless of
+ a prescription's stored refills-remaining (defense in depth), plus
+ restricted-OTC (pseudoephedrine-class) age/quantity limits; the latter
+ always escalates to a licensed pharmacist when a patient's documented
+ allergy intersects an item's interacts-with set. `:rx/dispense`/
+ `:rx/refill` are structurally excluded from every phase's :auto set,
+ including phase 3 -- a governor-clean fill still requires a licensed
+ pharmacist's sign-off; only unrestricted/clean-restricted `:otc/dispense`
+ is phase-3-auto-eligible. Source provenance for a dispense/refill is
+ limited to three real, citable public reference catalogs (FDA NDC
+ Directory, DEA Controlled Substance Schedules, NPPES NPI Registry) plus
+ an operator-registered :licensed-erx-network class requiring an ACTIVE
+ network record. The store holds no field for order-fulfillment, shipping
+ or payment logistics -- the actor only decides whether a dispense/refill
+ is allowed and records that it happened."}
