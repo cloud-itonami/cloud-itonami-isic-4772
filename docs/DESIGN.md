@@ -81,7 +81,7 @@ Directory、DEA Controlled Substance Schedules、NPPES NPI Registry)+
 operator が自前のライセンス済み e-prescribing/PDMP ネットワークを登録
 して初めて取込可能)。`facts/coverage` が常に正直に現状を報告する。
 
-## 6. デモ(`clojure -M:dev:run`)
+## 6. デモ(`kbb -M:dev:run`)
 
 `src/pharmacy/sim.cljk` が10操作を actor に通す(§sim.cljc docstring
 参照): 正当なOTC調剤 → commit、出典なし/改ざん疑い → hold ×2、
@@ -89,7 +89,7 @@ operator が自前のライセンス済み e-prescribing/PDMP ネットワーク
 未成年への規制OTC → hold、アレルギー相互作用 → 薬剤師承認 → commit、
 tier超過開示 → hold、紛争申立て → 薬剤師承認 → commit。
 
-## 7. テスト(`clojure -M:dev:test`)
+## 7. テスト(`kbb -M:dev:test`)
 
 `test/pharmacy/policy_contract_test.cljk` がガバナンス契約を実行可能に
 する。`test/pharmacy/phase_test.cljk` が「Rx調剤はどの phase でも

@@ -56,8 +56,8 @@ e-prescribing/PDMP ネットワークを登録して初めて取込可能)。
 
 - (+) `kotoba-lang/industry` registry の 4772 スロットが実装へ昇格
   (6件目の spec→implemented 昇格)。
-- (+) `clojure -M:dev:test`: 39 tests / 138 assertions、0 failures。
-  `clojure -M:lint`: エラー0・警告0。`clojure -M:dev:run` デモも
+- (+) `kbb -M:dev:test`: 39 tests / 138 assertions、0 failures。
+  `kbb -M:lint`: エラー0・警告0。`kbb -M:dev:run` デモも
   end-to-end で確認済み(10シナリオ全て正しく発火)。
 - (+) DatomicStore の contract test 実装中に実バグを発見・修正:
   `:dispute-apply` のパッチフィールドが Datomic 側の固定スキーマに
