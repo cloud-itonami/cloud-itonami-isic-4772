@@ -10,7 +10,7 @@
                        by swapping `langchain.db`'s `:db-api`.
 
   Both implement the same protocol and pass the same contract
-  (test/pharmacy/store_contract_test.clj) — the actor, the
+  (test/pharmacy/store_contract_test.cljk) — the actor, the
   PharmacyGovernor and the audit ledger never know which SSoT they run on.
 
   Entity shapes (ADR-2607114772): a patient (age + allergy flags only — no
