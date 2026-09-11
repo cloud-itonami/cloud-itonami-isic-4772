@@ -34,7 +34,7 @@ This actor decides **whether a dispense/refill is allowed** and records
 that it happened. It never handles order-routing, payment or shipping
 fulfillment — there is no field anywhere in this schema for those (see
 `docs/adr/0001-architecture.md`). Provenance is limited to three real,
-citable public reference sources (`src/pharmacy/facts.cljc`: FDA NDC
+citable public reference sources (`src/pharmacy/facts.cljk`: FDA NDC
 Directory, DEA Controlled Substance Schedules, NPPES NPI Registry) or an
 operator-registered `:licensed-erx-network` — every prescription-exists
 fact must resolve to one of these, never a bare "the LLM inferred it".

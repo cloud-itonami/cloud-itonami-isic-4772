@@ -24,7 +24,7 @@
 
 ## 2. OperationActor 内部
 
-`src/pharmacy/operation.cljc` の langgraph-clj StateGraph として実装。
+`src/pharmacy/operation.cljk` の langgraph-clj StateGraph として実装。
 **1 run = 1 操作**。
 
 ```
@@ -45,7 +45,7 @@ intake → advise → govern → decide ─┬─ commit ───────�
 
 ## 3. PharmacyGovernor(独立検閲層)
 
-`src/pharmacy/policy.cljc`。8チェック、優先順位順(上5つは HARD、人間承認
+`src/pharmacy/policy.cljk`。8チェック、優先順位順(上5つは HARD、人間承認
 でも上書き不可):
 
 1. **rbac**
@@ -68,14 +68,14 @@ intake → advise → govern → decide ─┬─ commit ───────�
 
 ## 4. SSoT と監査台帳
 
-`src/pharmacy/store.cljc`。entities: `patients`(年齢+アレルギーのみ、
+`src/pharmacy/store.cljk`。entities: `patients`(年齢+アレルギーのみ、
 広範な医療記録ではない) `items`(OTC/Rx区分、DEAスケジュール、規制OTC
 制限) `prescriptions`(検証状態+残数) `erx-networks`(取込ライセンス)
 `contracts`(subscriber licensing)。
 
 ## 5. R0 の正直なスコープ(捏造禁止)
 
-`src/pharmacy/facts.cljc`。実在する3つの自由公式参照ソース(FDA NDC
+`src/pharmacy/facts.cljk`。実在する3つの自由公式参照ソース(FDA NDC
 Directory、DEA Controlled Substance Schedules、NPPES NPI Registry)+
 1つの構造的クラス `:licensed-erx-network`(処方箋の実在性そのものは
 operator が自前のライセンス済み e-prescribing/PDMP ネットワークを登録
@@ -83,7 +83,7 @@ operator が自前のライセンス済み e-prescribing/PDMP ネットワーク
 
 ## 6. デモ(`clojure -M:dev:run`)
 
-`src/pharmacy/sim.cljc` が10操作を actor に通す(§sim.cljc docstring
+`src/pharmacy/sim.cljk` が10操作を actor に通す(§sim.cljc docstring
 参照): 正当なOTC調剤 → commit、出典なし/改ざん疑い → hold ×2、
 期限切れ処方箋 → hold、数量上限超過/Schedule II リフィル禁止 → hold ×2、
 未成年への規制OTC → hold、アレルギー相互作用 → 薬剤師承認 → commit、
@@ -91,9 +91,9 @@ tier超過開示 → hold、紛争申立て → 薬剤師承認 → commit。
 
 ## 7. テスト(`clojure -M:dev:test`)
 
-`test/pharmacy/policy_contract_test.clj` がガバナンス契約を実行可能に
-する。`test/pharmacy/phase_test.clj` が「Rx調剤はどの phase でも
-auto化されない」ことを保証。`test/pharmacy/facts_test.clj` が出典
+`test/pharmacy/policy_contract_test.cljk` がガバナンス契約を実行可能に
+する。`test/pharmacy/phase_test.cljk` が「Rx調剤はどの phase でも
+auto化されない」ことを保証。`test/pharmacy/facts_test.cljk` が出典
 カタログ自体の正直さ(捏造禁止)を保証。
 
 ## 8. 実装と業態の対応

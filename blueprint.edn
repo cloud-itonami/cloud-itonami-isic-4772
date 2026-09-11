@@ -12,7 +12,7 @@
  :itonami.blueprint/maturity :implemented
  :itonami.blueprint/implemented-slice
  "PharmacyOrder-LLM sealed into a single :advise node, always routed through
- an independent PharmacyGovernor (src/pharmacy/policy.cljc) and a 0->3
+ an independent PharmacyGovernor (src/pharmacy/policy.cljk) and a 0->3
  rollout-phase gate, via a langgraph-clj StateGraph (src/pharmacy/
  operation.cljc) with an append-only audit ledger and a MemStore +
  DatomicStore (langchain.db) SSoT proven to satisfy the same store
