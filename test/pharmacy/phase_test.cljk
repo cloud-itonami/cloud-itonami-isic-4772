@@ -5,7 +5,7 @@
   unlocked — and `:rx/dispense`/`:rx/refill`/`:dispute/request` never
   auto-commit at ANY phase (pharmacist sign-off is structural, not a
   rollout-maturity gate)."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langgraph.graph :as g]
             [pharmacy.store :as store]
             [pharmacy.operation :as op]))
