@@ -6,7 +6,7 @@
     PharmacyOrder-LLM never dispenses/refills/discloses/resolves a
     record the PharmacyGovernor would reject, and every decision (commit
     OR hold) leaves exactly one ledger fact."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langgraph.graph :as g]
             [pharmacy.store :as store]
             [pharmacy.operation :as op]))
