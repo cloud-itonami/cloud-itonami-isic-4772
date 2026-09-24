@@ -37,7 +37,7 @@
     8. dispute requests           — a dispensing dispute/adverse-event
                                      report NEVER auto-resolves, at any
                                      confidence, any phase."
-  (:require [clojure.set :as set]
+  (:require [kotoba.lang.coll :as set]
             [pharmacy.facts :as facts]
             [pharmacy.store :as store]))
 
